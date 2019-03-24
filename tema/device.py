@@ -6,7 +6,7 @@ Assignment 1
 March 2019
 """
 
-from threading import Event, Thread, BoundedSemaphore
+from threading import Event, Thread, BoundedSemaphore, Lock
 from Queue import Queue
 from barrier import ReusableBarrier
 
@@ -36,9 +36,11 @@ class Device(object):
         self.location_locks = []
         self.timepoint_done = Event()
         self.barrier = None
+        self.setup_done = Event()
         self.thread = DeviceThread(self)
         self.thread.start()
-        self.scriptsLock = BoundedSemaphore(1)
+        self.scripts_lock = BoundedSemaphore(1)
+        self.lock = Lock()
 
     def __str__(self):
         """
@@ -66,9 +68,10 @@ class Device(object):
 
             # Use the same variables for all devices
             for dev in devices:
-                if dev != self:
-                    dev.location_locks = self.location_locks
-                    dev.barrier = self.barrier
+                dev.location_locks = self.location_locks
+                dev.barrier = self.barrier
+
+        self.setup_done.set()
 
     def assign_script(self, script, location):
         """
@@ -82,10 +85,10 @@ class Device(object):
         @param location: the location for which the script is interested in
         """
         if script is not None:
-            self.scriptsLock.acquire()
+            # self.scripts_lock.acquire()
             self.scripts.append((script, location))
-            self.scriptsLock.release()
-            self.script_received.set()
+            # self.scripts_lock.release()
+            # self.script_received.set()
         else:
             self.timepoint_done.set()
 
@@ -98,7 +101,7 @@ class Device(object):
 
         @rtype: Float
         @return: the pollution value
-        """
+        """    
         if location in self.sensor_data:
             return self.sensor_data[location]
         else:
@@ -114,8 +117,9 @@ class Device(object):
         @type data: Float
         @param data: the pollution value
         """
-        if location in self.sensor_data:
-            self.sensor_data[location] = data
+        with self.lock:
+            if location in self.sensor_data:
+                self.sensor_data[location] = data
 
     def shutdown(self):
         """
@@ -144,27 +148,35 @@ class DeviceThread(Thread):
 
     def run(self):
         self.thread_pool.start_workers()
+        self.device.setup_done.wait()
 
         # hope there is only one timepoint, as multiple iterations of the loop are not supported
         while True:
             # get the current neighbourhood
             neighbours = self.device.supervisor.get_neighbours()
+
             if neighbours is None:
                 break
-
-            while (True):
-                if self.device.script_received.isSet():
-                    self.device.scriptsLock.acquire()
-                    for (script, location) in self.device.scripts:
-                        self.thread_pool.add_script(script, neighbours, location)
-                    self.device.script_received.clear()
-                    self.device.scripts = []
-                    self.device.scriptsLock.release()
-                if self.device.timepoint_done.isSet():
-                    self.device.timepoint_done.clear()
-                    self.device.script_received.set()
-                    break
             
+            self.device.barrier.wait()
+            self.device.timepoint_done.wait()
+
+            for (script, location) in self.device.scripts:
+                self.thread_pool.add_script(script, neighbours, location)
+            
+            # while True:
+            #     if self.device.script_received.isSet():
+            #         self.device.scripts_lock.acquire()
+            #         for (script, location) in self.device.scripts:
+            #             self.thread_pool.add_script(script, neighbours, location)
+            #         self.device.script_received.clear()
+            #         self.device.scripts_lock.release()
+            #     if self.device.timepoint_done.isSet():
+            #         self.device.timepoint_done.clear()
+            #         # self.device.script_received.set()
+            #         break
+            
+            self.device.timepoint_done.clear()
             self.thread_pool.wait()
             self.device.barrier.wait()
 
@@ -178,12 +190,13 @@ class Worker(Thread):
         self.device = device
 
     def run(self):
+
         while True:
             script, neighbours, location = self.queue.get()
 
             if script is None and location is None and neighbours is None:
                 self.queue.task_done()
-                return
+                break
 
             script_data = []
             self.device.location_locks[location].acquire()
@@ -206,7 +219,8 @@ class Worker(Thread):
                     device.set_data(location, result)
                 # update our data, hope no one is updating at the same time
                 self.device.set_data(location, result)
-                self.device.location_locks[location].release()
+            
+            self.device.location_locks[location].release()
             self.queue.task_done()
 
 
@@ -220,8 +234,8 @@ class ThreadPool:
         self.device = device
 
     def start_workers(self):
-        for th in self.workers:
-            th.start()
+        for worker in self.workers:
+            worker.start()
 
     def add_script(self, script, neighbours, location):
         """ Add a task to the queue """
