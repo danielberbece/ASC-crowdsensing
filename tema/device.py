@@ -6,7 +6,7 @@ Assignment 1
 March 2019
 """
 
-from threading import Event, Thread, BoundedSemaphore, Lock
+from threading import Event, Thread, BoundedSemaphore
 from Queue import Queue
 from barrier import ReusableBarrier
 
@@ -31,16 +31,16 @@ class Device(object):
         self.device_id = device_id
         self.sensor_data = sensor_data
         self.supervisor = supervisor
-        self.script_received = Event()
         self.scripts = []
+        self.scripts_buffer = []
         self.location_locks = []
-        self.timepoint_done = Event()
+        self.script_received = Event()
         self.barrier = None
-        self.setup_done = Event()
+        self.scripts_lock = BoundedSemaphore(1)
+        self.scripts_saved = Event()
+        self.scripts_saved.set()
         self.thread = DeviceThread(self)
         self.thread.start()
-        self.scripts_lock = BoundedSemaphore(1)
-        self.lock = Lock()
 
     def __str__(self):
         """
@@ -59,19 +59,17 @@ class Device(object):
         @param devices: list containing all devices
         """
         if self.device_id == 0:
-            # Make script running atomic using BoundedSemaphore
+            # Make scripts run atomically using BoundedSemaphore
             for _ in range(100):
                 self.location_locks.append(BoundedSemaphore(1))
 
             # Initialize reusable barrier
             self.barrier = ReusableBarrier(len(devices))
 
-            # Use the same variables for all devices
+            # Braodcast the barrier to all devices
             for dev in devices:
                 dev.location_locks = self.location_locks
                 dev.barrier = self.barrier
-
-        self.setup_done.set()
 
     def assign_script(self, script, location):
         """
@@ -85,12 +83,12 @@ class Device(object):
         @param location: the location for which the script is interested in
         """
         if script is not None:
-            # self.scripts_lock.acquire()
-            self.scripts.append((script, location))
-            # self.scripts_lock.release()
-            # self.script_received.set()
+            self.scripts_saved.wait()
+            self.scripts_buffer.append((script, location))
         else:
-            self.timepoint_done.set()
+            self.scripts_saved.clear()
+            self.script_received.set()
+
 
     def get_data(self, location):
         """
@@ -117,9 +115,8 @@ class Device(object):
         @type data: Float
         @param data: the pollution value
         """
-        with self.lock:
-            if location in self.sensor_data:
-                self.sensor_data[location] = data
+        if location in self.sensor_data:
+            self.sensor_data[location] = data
 
     def shutdown(self):
         """
@@ -147,43 +144,48 @@ class DeviceThread(Thread):
 
 
     def run(self):
+        # Wait for the setup to be done:
         self.thread_pool.start_workers()
-        self.device.setup_done.wait()
 
-        # hope there is only one timepoint, as multiple iterations of the loop are not supported
         while True:
             # get the current neighbourhood
             neighbours = self.device.supervisor.get_neighbours()
 
+            # if neighbours is none, exit
             if neighbours is None:
                 break
             
-            self.device.barrier.wait()
-            self.device.timepoint_done.wait()
-
+            # Send already received scripts to the threadpool for executing:
             for (script, location) in self.device.scripts:
                 self.thread_pool.add_script(script, neighbours, location)
+
+            # Wait until all script are received
+            self.device.script_received.wait()
+
+            # Send the new scripts to the threadpool for executing:
+            for (script, location) in self.device.scripts_buffer:
+                self.thread_pool.add_script(script, neighbours, location)
             
-            # while True:
-            #     if self.device.script_received.isSet():
-            #         self.device.scripts_lock.acquire()
-            #         for (script, location) in self.device.scripts:
-            #             self.thread_pool.add_script(script, neighbours, location)
-            #         self.device.script_received.clear()
-            #         self.device.scripts_lock.release()
-            #     if self.device.timepoint_done.isSet():
-            #         self.device.timepoint_done.clear()
-            #         # self.device.script_received.set()
-            #         break
-            
-            self.device.timepoint_done.clear()
+            # Save the new scripts with all scripts
+            self.device.scripts = self.device.scripts + self.device.scripts_buffer
+            self.device.scripts_buffer = []
+
+            # Mark script buffering as available
+            self.device.scripts_saved.set()
+            self.device.script_received.clear()
+
+            # Wait all scripts to be processed from all devices in order
+            # to proceed to the next timepoint
             self.thread_pool.wait()
             self.device.barrier.wait()
 
+        # Timepoints done, finish the threadpool and exit
         self.thread_pool.terminate()
       
 class Worker(Thread):
-    """ Thread executing tasks from a given tasks queue """
+    """ 
+    Thread executing tasks from a given tasks queue
+    """
     def __init__(self, queue, device):
         Thread.__init__(self)
         self.queue = queue
@@ -194,8 +196,7 @@ class Worker(Thread):
         while True:
             script, neighbours, location = self.queue.get()
 
-            if script is None and location is None and neighbours is None:
-                self.queue.task_done()
+            if script is None:
                 break
 
             script_data = []
@@ -225,7 +226,9 @@ class Worker(Thread):
 
 
 class ThreadPool:
-    """ Pool of threads consuming tasks from a queue """
+    """
+    Pool of threads consuming tasks from a queue
+    """
     def __init__(self, device, num_threads):
         self.queue = Queue(num_threads)
         self.workers = []
@@ -238,14 +241,21 @@ class ThreadPool:
             worker.start()
 
     def add_script(self, script, neighbours, location):
-        """ Add a task to the queue """
+        """
+        Add a script to the queue
+        """
         self.queue.put((script, neighbours, location))
 
     def wait(self):
+        """ 
+        Wait for completion of all the workers in the queue
+        """
         self.queue.join()
 
     def terminate(self):
-        """ Wait for completion of all the workers in the queue """
+        """
+        Terminate the threadpool
+        """
         self.queue.join()
         for _ in range(len(self.workers)):
             self.add_script(None, None, None)
