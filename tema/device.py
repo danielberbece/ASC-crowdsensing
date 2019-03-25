@@ -99,11 +99,10 @@ class Device(object):
 
         @rtype: Float
         @return: the pollution value
-        """    
+        """
         if location in self.sensor_data:
             return self.sensor_data[location]
-        else:
-            return None
+        return None
 
     def set_data(self, location, data):
         """
@@ -154,7 +153,7 @@ class DeviceThread(Thread):
             # if neighbours is none, exit
             if neighbours is None:
                 break
-            
+
             # Send already received scripts to the threadpool for executing:
             for (script, location) in self.device.scripts:
                 self.thread_pool.add_script(script, neighbours, location)
@@ -165,7 +164,7 @@ class DeviceThread(Thread):
             # Send the new scripts to the threadpool for executing:
             for (script, location) in self.device.scripts_buffer:
                 self.thread_pool.add_script(script, neighbours, location)
-            
+
             # Save the new scripts with all scripts
             self.device.scripts = self.device.scripts + self.device.scripts_buffer
             self.device.scripts_buffer = []
@@ -181,9 +180,9 @@ class DeviceThread(Thread):
 
         # Timepoints done, finish the threadpool and exit
         self.thread_pool.terminate()
-      
+
 class Worker(Thread):
-    """ 
+    """
     Thread executing tasks from a given tasks queue
     """
     def __init__(self, queue, device):
@@ -220,12 +219,12 @@ class Worker(Thread):
                     device.set_data(location, result)
                 # update our data, hope no one is updating at the same time
                 self.device.set_data(location, result)
-            
+
             self.device.location_locks[location].release()
             self.queue.task_done()
 
 
-class ThreadPool:
+class ThreadPool(object):
     """
     Pool of threads consuming tasks from a queue
     """
@@ -237,6 +236,9 @@ class ThreadPool:
         self.device = device
 
     def start_workers(self):
+        """
+        Start the worker threads
+        """
         for worker in self.workers:
             worker.start()
 
@@ -247,7 +249,7 @@ class ThreadPool:
         self.queue.put((script, neighbours, location))
 
     def wait(self):
-        """ 
+        """
         Wait for completion of all the workers in the queue
         """
         self.queue.join()

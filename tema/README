@@ -1,0 +1,51 @@
+ASC - Tema 1
+Student: Berbece Daniel
+Grupa: 335CA
+
+
+		1) Enunt
+	Cerinta temei a constat in paralelizarea rularii unor scripturi
+de catre un device, in scopul completarii unui sistem de tip crowdsensing.
+Ca la orice algoritm paralelizat, atentia a fost necesara asupra zonelor
+concurente ale programului, astfel incat acesta sa ruleze fara probleme
+de sincronizare
+
+		2) Implementare
+	Tema a fost scrisa in limbajul de programare Python 2.7. Implementarea
+este concentrata in fisierul device.py care contine 3 clase:
+		* clasa Device, care este instantiat de supervisor
+		* clasa DeviceThread, care este un thread asociat devicelui
+		* clasa Worker, care este un thread ce ruleaza un job primit din
+						coada de joburi
+		* clasa ThreadPool, care contine logica de instantiere si management al
+							threadurilor de tip worker
+	Modul in care decurge logica unui device este in felul urmator: Atunci cand
+un obiect Device este creat, acesta isi creeaza automat si un thread asociat
+acestuia, numit DeviceThread. Acesta este ThreadMaster-ul care parcurge fiecare
+timepoint, pana la final. Astfel, Device este doar o interfata de comunicare
+intre Supervisor si DeviceThread. DeviceThread isi instantiaza un ThreadPool,
+care se ocupa de rularea scripturilor pe 8 threaduri (simuland 8 coruri), adica
+paralel. Un thread care ruleaza un script este reprezentat prin clasa Worker.
+	DeviceThread trimite la fiecare timepoint scripturile primite anterior de
+la Supervisor si asteapta sa primeasca si scripturile de la timepointul curent.
+Dupa ce DeviceThread a fost semnalat (folosind un obiect de tip Event) acesta
+trimite catre ThreadPool scripturile tocmai primite si le adauga la lista de
+scripturi deja primite. Deoarece ne este cerut faptul ca trecerea de la un
+timepoint la altul trebuie facuta de toate device-urile simultan, am folosit
+un ReusableBarrier la care trebuie sa ajunga toate threadurile master ale
+Device-urilor dupa ce au rulat scripturile.
+	In cadrul cerintei este de asemenea enuntat faptul ca rularea scriptului
+trebuie sa se faca in mod atomic in toate stagiile acestuia (data gathering,
+actual script running, data scattering). Pentru a rezolva aceasta problema de
+concurenta am folosit un BoundedSemaphore care functioneaza ca un lock pe
+locatia actuala a dispozitivului. Astfel, pentru o locatie se poate rula doar
+un script la un moment dat. Aceasta abordare este suficient de restrictiva cat
+sa nu apara probleme de sincronizare, dar suficient de libertina cat sa permita
+rularea mai multor scripturi simultan, in mod paralel, pe locatii diferite.
+
+		3) Referinte
+	Pentru implementarea ThreadPool-ului am folosit un obiect Queue, care
+usureaza punerea si luarea joburilor din coada, fara a aparea inconsistente la
+rulare. Mai multe detalii aici: https://docs.python.org/3/library/queue.html
+	
+	
