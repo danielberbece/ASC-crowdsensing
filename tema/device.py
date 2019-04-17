@@ -36,7 +36,7 @@ class Device(object):
         self.location_locks = []
         self.script_received = Event()
         self.barrier = None
-        self.scripts_lock = BoundedSemaphore(1)
+        # self.scripts_lock = BoundedSemaphore(1)
         self.scripts_saved = Event()
         self.scripts_saved.set()
         self.thread = DeviceThread(self)
